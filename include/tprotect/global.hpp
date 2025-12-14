@@ -8,7 +8,8 @@
 
 namespace tprotect
 {
-constexpr const char *const initial_mapping{"IDvCtWclkuPZOgXshNwoBjSJzdxVMUpQGRrqEfLmbnTiFyaHeKAY"};
+constexpr const char *const initial_substitution{"IDvCtWclkuPZOgXshNwoBjSJzdxVMUpQGRrqEfLmbnTiFyaHeKAY"};
+constexpr const char *const initial_vigenere{"KEY"};
 constexpr const int initial_key{42};
 
 template <typename T> using eresult = std::expected<T, std::string>; // the `std::string` holds error messages

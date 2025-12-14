@@ -6,10 +6,14 @@
 #include <mutex>
 #include <string>
 
+#include <tprotect/cipher/advanced_analyzer.hpp>
 #include <tprotect/cipher/frequency_analyzer.hpp>
+#include <tprotect/cipher/rail_fence_cipher.hpp>
 #include <tprotect/cipher/substitution_cipher.hpp>
 #include <tprotect/cipher/transposition_cipher.hpp>
+#include <tprotect/cipher/vigenere_cipher.hpp>
 #include <tprotect/global.hpp>
+#include <tprotect/imgui_histogram.hpp>
 
 struct SDL_Window;
 struct SDL_Renderer;
@@ -72,6 +76,7 @@ class gui final
                                            std::string title) noexcept; // the actual initializer
     void shutdown() noexcept;
     void render_window() noexcept;                       // render the gui
+    void render_stats_window() noexcept;                 // render statistics window
     [[nodiscard]] eresult<void> process_file() noexcept; // display dialogs
 
     std::mutex main_loop_mutex_;
@@ -80,20 +85,27 @@ class gui final
     SDL_Renderer *renderer_{};
 
     // UI state
-    ImFont *futura_medium{};
-    ImFont *jetbrains_mono_regular{};
-    enum class cipher
+    ImFont *futura_medium_{};
+    ImFont *jetbrains_mono_regular_{};
+    enum class cipher_type
     {
         substitution,
         transposition,
+        vigenere,
+        rail_fence,
     };
     std::string encrypted_text_;
     std::string decrypted_text_;
-    cipher selected_cipher_{cipher::substitution};
-    tprotect::cipher::substitution_cipher substitution_cipher{initial_mapping};
-    tprotect::cipher::transposition_cipher transposition_cipher{initial_key};
-    int transposition_key{initial_key};
-    bool show_frequency_analysis_{false};
+    cipher_type selected_cipher_{cipher_type::substitution};
+    tprotect::cipher::substitution_cipher substitution_cipher_{initial_substitution};
+    tprotect::cipher::transposition_cipher transposition_cipher_{initial_key};
+    tprotect::cipher::vigenere_cipher vigenere_cipher_{initial_vigenere};
+    tprotect::cipher::rail_fence_cipher rail_fence_cipher_{initial_key};
+    int transposition_key_{initial_key};
+    std::string vigenere_key_{initial_vigenere};
+    int rail_fence_rails_{initial_key};
+    bool show_stats_window_{false};
+    int stats_window_tab_{0};
     double fps_idle_{10.};
     bool is_idling_{};
     std::atomic<bool> is_initialized_; // `std::atomic<bool>` for thread safety

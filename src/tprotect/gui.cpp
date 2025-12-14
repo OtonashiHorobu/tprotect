@@ -113,11 +113,11 @@ bool gui::is_initialized() const noexcept
     ImFontConfig font_cfg{};
     font_cfg.MergeMode = true;
     io.Fonts->AddFontFromMemoryCompressedTTF(futura_medium_compressed_data, sizeof futura_medium_compressed_data);
-    futura_medium = io.Fonts->AddFontFromMemoryCompressedTTF(
+    futura_medium_ = io.Fonts->AddFontFromMemoryCompressedTTF(
         noto_sans_cjk_regular_compressed_data, sizeof noto_sans_cjk_regular_compressed_data, 0.f, &font_cfg);
     io.Fonts->AddFontFromMemoryCompressedTTF(jetbrains_mono_regular_compressed_data,
                                              sizeof jetbrains_mono_regular_compressed_data);
-    jetbrains_mono_regular = io.Fonts->AddFontFromMemoryCompressedTTF(
+    jetbrains_mono_regular_ = io.Fonts->AddFontFromMemoryCompressedTTF(
         noto_sans_cjk_regular_compressed_data, sizeof noto_sans_cjk_regular_compressed_data, 0.f, &font_cfg);
 
     return {};
@@ -232,6 +232,12 @@ void gui::shutdown() noexcept
         }
         ImGui::End();
 
+        // Render statistics window
+        if (show_stats_window_)
+        {
+            render_stats_window();
+        }
+
         // Render the frame
         ImGui::Render();
         auto &io{ImGui::GetIO()};
@@ -250,7 +256,7 @@ void gui::shutdown() noexcept
 void gui::render_window() noexcept
 {
     // Top title with larger font
-    ImGui::PushFont(futura_medium, ImGui::GetFontSize() * 2.f);
+    ImGui::PushFont(futura_medium_, ImGui::GetFontSize() * 2.f);
     ImGui::TextCentered("TProtect");
     ImGui::PopFont();
     if (ImGui::IsItemHovered())
@@ -372,7 +378,7 @@ void gui::render_window() noexcept
 
         // Cell (2,1): Encrypted text input
         ImGui::TableSetColumnIndex(0);
-        ImGui::PushFont(jetbrains_mono_regular, 0.f);
+        ImGui::PushFont(jetbrains_mono_regular_, 0.f);
         ImGui::InputTextMultiline("##Decrypted", &decrypted_text_, ImVec2{-1, -1});
         ImGui::PopFont();
 
@@ -385,17 +391,13 @@ void gui::render_window() noexcept
         ImGui::PushItemWidth(button_width);
 
         ImGui::Spacing();
-        ImGui::RadioButton("Substitution", reinterpret_cast<int *>(&selected_cipher_),
-                           static_cast<int>(cipher::substitution));
+        ImGui::TextCentered("Cipher Type");
+        const char *cipher_items[]{"Substitution", "Transposition", "Vigenère", "Rail Fence"};
+        ImGui::Combo("##CipherType", reinterpret_cast<int *>(&selected_cipher_), cipher_items,
+                     IM_ARRAYSIZE(cipher_items));
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Each letter is replaced by another letter based on a fixed mapping");
-        }
-        ImGui::RadioButton("Transposition", reinterpret_cast<int *>(&selected_cipher_),
-                           static_cast<int>(cipher::transposition));
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Letters of the message are rearranged according to a shifted pattern");
+            ImGui::SetTooltip("Select the cipher algorithm to use");
         }
         ImGui::Spacing();
         ImGui::Separator();
@@ -405,11 +407,18 @@ void gui::render_window() noexcept
             [this]() -> eresult<std::string> {
                 switch (selected_cipher_)
                 {
-                case cipher::substitution:
-                    return substitution_cipher.encrypt(decrypted_text_);
-                case cipher::transposition:
-                    return transposition_cipher.encrypt(decrypted_text_);
+                case cipher_type::substitution:
+                    return substitution_cipher_.encrypt(decrypted_text_);
+                case cipher_type::transposition:
+                    return transposition_cipher_.encrypt(decrypted_text_);
+                case cipher_type::vigenere:
+                    vigenere_cipher_.set_key(vigenere_key_);
+                    return vigenere_cipher_.encrypt(decrypted_text_);
+                case cipher_type::rail_fence:
+                    rail_fence_cipher_.set_rails(rail_fence_rails_);
+                    return rail_fence_cipher_.encrypt(decrypted_text_);
                 }
+                return std::unexpected{"Unknown cipher type"};
             }()
                             .and_then([this](const std::string value) -> eresult<void> {
                                 encrypted_text_ = std::move(value);
@@ -427,11 +436,20 @@ void gui::render_window() noexcept
             [this]() -> eresult<std::string> {
                 switch (selected_cipher_)
                 {
-                case cipher::substitution:
-                    return substitution_cipher.decrypt(encrypted_text_);
-                case cipher::transposition:
-                    return transposition_cipher.decrypt(encrypted_text_);
+                case cipher_type::substitution:
+
+                    return substitution_cipher_.decrypt(encrypted_text_);
+                case cipher_type::transposition:
+                    transposition_cipher_.set_key(transposition_key_);
+                    return transposition_cipher_.decrypt(encrypted_text_);
+                case cipher_type::vigenere:
+                    vigenere_cipher_.set_key(vigenere_key_);
+                    return vigenere_cipher_.decrypt(encrypted_text_);
+                case cipher_type::rail_fence:
+                    rail_fence_cipher_.set_rails(rail_fence_rails_);
+                    return rail_fence_cipher_.decrypt(encrypted_text_);
                 }
+                return std::unexpected{"Unknown cipher type"};
             }()
                             .and_then([this](const std::string value) -> eresult<void> {
                                 decrypted_text_ = std::move(value);
@@ -445,7 +463,7 @@ void gui::render_window() noexcept
                             .emplace();
         }
 
-        if (selected_cipher_ == cipher::transposition)
+        if (selected_cipher_ == cipher_type::transposition)
         {
             if (ImGui::Button("Decrypt Brute", ImVec2{button_width, 0}))
             {
@@ -457,7 +475,25 @@ void gui::render_window() noexcept
             ImGui::Separator();
             ImGui::Spacing();
             ImGui::TextCentered("Transposition Key");
-            ImGui::InputInt("##TranspositionKey", &transposition_key);
+            ImGui::InputInt("##TranspositionKey", &transposition_key_);
+        }
+
+        if (selected_cipher_ == cipher_type::vigenere)
+        {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::TextCentered("Vigenère Key");
+            ImGui::InputText("##VignereKey", &vigenere_key_);
+        }
+
+        if (selected_cipher_ == cipher_type::rail_fence)
+        {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::TextCentered("Rails");
+            ImGui::InputInt("##RailFenceKey", &rail_fence_rails_);
         }
 
         ImGui::InformationPopup("Error Encrypting", cipher_message.c_str(), [] {});
@@ -467,13 +503,13 @@ void gui::render_window() noexcept
         ImGui::Separator();
         ImGui::Spacing();
 
-        if (ImGui::Button(show_frequency_analysis_ ? "Hide Analysis" : "Show Analysis", ImVec2{button_width, 0}))
+        if (ImGui::Button(show_stats_window_ ? "Hide Statistics" : "Show Statistics", ImVec2{button_width, 0}))
         {
-            show_frequency_analysis_ = !show_frequency_analysis_;
+            show_stats_window_ = !show_stats_window_;
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Toggle letter frequency analysis for cipher breaking");
+            ImGui::SetTooltip("Toggle advanced cryptanalysis statistics window");
         }
 
         ImGui::Spacing();
@@ -491,91 +527,311 @@ void gui::render_window() noexcept
 
         // Cell (2,3): Decrypted text input
         ImGui::TableSetColumnIndex(2);
-        ImGui::PushFont(jetbrains_mono_regular, 0.f);
+        ImGui::PushFont(jetbrains_mono_regular_, 0.f);
         ImGui::InputTextMultiline("##Encrypted", &encrypted_text_, ImVec2{-1, -1});
         ImGui::PopFont();
 
         ImGui::EndTable();
     }
 
-    // Frequency Analysis Panel
-    if (show_frequency_analysis_)
+    // ImGui::PopFont();
+}
+
+void gui::render_stats_window() noexcept
+{
+    if (ImGui::Begin("Cryptanalysis Statistics", &show_stats_window_,
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
     {
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::TextCentered("Letter Frequency Analysis");
-        if (ImGui::IsItemHovered())
+        // Tab bar for different analysis views
+        if (ImGui::BeginTabBar("StatsTabBar"))
         {
-            ImGui::SetTooltip("Analyze letter frequencies to help break substitution ciphers");
-        }
-
-        ImGui::Spacing();
-
-        // Analyze encrypted text
-        const auto frequencies{tprotect::cipher::frequency_analyzer::analyze(encrypted_text_)};
-
-        if (frequencies.empty())
-        {
-            ImGui::TextCentered("No letters found in encrypted text");
-        }
-        else
-        {
-            // Create two-column layout for frequency table
-            if (ImGui::BeginTable("FrequencyTable", 4,
-                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+            // Tab 1: Frequency Analysis with Histogram
+            if (ImGui::BeginTabItem("Frequency Analysis"))
             {
-                // Setup columns
-                ImGui::TableSetupColumn("Letter", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableSetupColumn("Frequency", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-                ImGui::TableSetupColumn("English", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableHeadersRow();
+                ImGui::TextCentered("Letter Frequency Distribution");
+                ImGui::Spacing();
 
-                // Get English frequencies for comparison
-                const auto english_freq{tprotect::cipher::frequency_analyzer::get_english_frequencies()};
+                const auto frequencies{tprotect::cipher::frequency_analyzer::analyze(encrypted_text_)};
 
-                // Display frequency data
-                for (const auto &freq : frequencies)
+                if (frequencies.empty())
                 {
-                    ImGui::TableNextRow();
-
-                    // Letter column
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextCentered(std::string{freq.letter}.c_str());
-
-                    // Count column
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::Text("%d", freq.count);
-
-                    // Frequency bar column
-                    ImGui::TableSetColumnIndex(2);
-                    const float bar_fraction{freq.percentage / 100.0f};
-                    ImGui::ProgressBar(bar_fraction, ImVec2{-1, 0}, std::format("{:.2f}%", freq.percentage).c_str());
-
-                    // English frequency column (for comparison)
-                    ImGui::TableSetColumnIndex(3);
-                    if (freq.letter >= 'A' && freq.letter <= 'Z')
+                    ImGui::TextCentered("No letters found in encrypted text");
+                }
+                else
+                {
+                    // Prepare data for histogram
+                    std::vector<float> values;
+                    std::vector<const char *> labels;
+                    for (const auto &freq : frequencies)
                     {
-                        ImGui::Text("%.2f%%", english_freq[freq.letter - 'A']);
+                        values.push_back(freq.percentage);
+                        labels.push_back(std::string{freq.letter}.c_str());
                     }
-                    else if (freq.letter >= 'a' && freq.letter <= 'z')
+
+                    // Draw vertical histogram
+                    ImGui::HistogramBarsVertical("FrequencyHistogram", values, labels, 100.0f, ImVec2{-1, 300});
+                }
+
+                ImGui::EndTabItem();
+            }
+
+            // Tab 2: Advanced Statistics & Cipher Detection
+            if (ImGui::BeginTabItem("Cipher Detection"))
+            {
+                ImGui::TextCentered("Automatic Cipher Type Detection");
+                ImGui::Spacing();
+
+                if (encrypted_text_.empty())
+                {
+                    ImGui::TextCentered("No encrypted text to analyze");
+                }
+                else
+                {
+                    const auto stats{tprotect::cipher::advanced_analyzer::get_statistics(encrypted_text_)};
+
+                    ImGui::Separator();
+                    ImGui::Text("Index of Coincidence (IC): %.4f", stats.index_of_coincidence);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(?)");
+                    if (ImGui::IsItemHovered())
                     {
-                        ImGui::Text("%.2f%%", english_freq[freq.letter - 'a']);
+                        ImGui::SetTooltip("IC ≈ 0.065 for English, ≈ 0.038 for random text");
+                    }
+
+                    ImGui::Text("Shannon Entropy: %.4f bits", stats.entropy);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(?)");
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("Higher entropy = more random, lower = more structured");
+                    }
+
+                    ImGui::Text("Chi-Squared (χ²): %.2f", stats.chi_squared);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(?)");
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("Lower χ² = closer to English, higher = more different");
+                    }
+
+                    ImGui::Separator();
+                    ImGui::Text("Total Letters: %d", stats.total_letters);
+                    ImGui::Text("Unique Letters: %d", stats.unique_letters);
+
+                    ImGui::Separator();
+                    ImGui::TextWrapped("Encryption Status & Method Detection:");
+                    ImGui::Spacing();
+
+                    // Determine if text is encrypted
+                    bool is_likely_encrypted{false};
+                    std::string detected_cipher{"Unknown"};
+                    float confidence{0.0f};
+
+                    // Check if it's likely English (not encrypted)
+                    if (stats.chi_squared < 100.0f && stats.index_of_coincidence > 0.055f)
+                    {
+                        ImGui::TextColored(ImVec4{1.0f, 0.5f, 0.0f, 1.0f},
+                                           "⚠ Text appears to be UNENCRYPTED (English)");
+                        is_likely_encrypted = false;
+                    }
+                    else
+                    {
+                        is_likely_encrypted = true;
+                        ImGui::TextColored(ImVec4{1.0f, 1.0f, 0.0f, 1.0f}, "✓ Text appears to be ENCRYPTED");
+                        ImGui::Spacing();
+
+                        // Analyze which cipher type is most likely
+                        const auto bigrams{tprotect::cipher::advanced_analyzer::analyze_bigrams(encrypted_text_)};
+                        const auto trigrams{tprotect::cipher::advanced_analyzer::analyze_trigrams(encrypted_text_)};
+
+                        // Substitution cipher detection
+                        // - High IC (>0.06), moderate entropy, chi-squared varies
+                        // - Bigrams/trigrams show patterns
+                        float substitution_score{0.0f};
+                        if (stats.index_of_coincidence > 0.055f)
+                            substitution_score += 40.0f;
+                        if (stats.entropy < 4.5f)
+                            substitution_score += 30.0f;
+                        if (!bigrams.empty() && bigrams[0].percentage > 2.0f)
+                            substitution_score += 30.0f;
+
+                        // Transposition cipher detection
+                        // - High IC (similar to original), high entropy, chi-squared similar to English
+                        // - Letter frequencies similar to English
+                        float transposition_score{0.0f};
+                        if (stats.index_of_coincidence > 0.06f && stats.index_of_coincidence < 0.07f)
+                            transposition_score += 40.0f;
+                        if (stats.chi_squared < 150.0f)
+                            transposition_score += 30.0f;
+                        if (stats.entropy > 4.0f && stats.entropy < 5.0f)
+                            transposition_score += 30.0f;
+
+                        // Vigenère cipher detection
+                        // - Medium IC (0.04-0.06), medium entropy
+                        // - Repeating patterns in bigrams/trigrams
+                        float vigenere_score{0.0f};
+                        if (stats.index_of_coincidence > 0.04f && stats.index_of_coincidence < 0.065f)
+                            vigenere_score += 40.0f;
+                        if (stats.entropy > 3.5f && stats.entropy < 4.5f)
+                            vigenere_score += 30.0f;
+                        if (!bigrams.empty() && bigrams.size() > 50)
+                            vigenere_score += 30.0f;
+
+                        // Rail Fence cipher detection
+                        // - High IC, specific entropy pattern
+                        // - Unusual bigram distribution
+                        float rail_fence_score{0.0f};
+                        if (stats.index_of_coincidence > 0.06f)
+                            rail_fence_score += 30.0f;
+                        if (stats.entropy > 4.2f && stats.entropy < 4.8f)
+                            rail_fence_score += 35.0f;
+                        if (stats.unique_letters > 20)
+                            rail_fence_score += 35.0f;
+
+                        // Normalize scores
+                        float total_score{substitution_score + transposition_score + vigenere_score + rail_fence_score};
+                        if (total_score > 0)
+                        {
+                            substitution_score = (substitution_score / total_score) * 100.0f;
+                            transposition_score = (transposition_score / total_score) * 100.0f;
+                            vigenere_score = (vigenere_score / total_score) * 100.0f;
+                            rail_fence_score = (rail_fence_score / total_score) * 100.0f;
+                        }
+
+                        // Display detection results
+                        ImGui::Spacing();
+                        ImGui::Text("Cipher Type Probabilities:");
+                        ImGui::Spacing();
+
+                        ImGui::Text("Substitution Cipher: %.1f%%", substitution_score);
+                        ImGui::ProgressBar(substitution_score / 100.0f, ImVec2{-1, 0});
+
+                        ImGui::Text("Transposition Cipher: %.1f%%", transposition_score);
+                        ImGui::ProgressBar(transposition_score / 100.0f, ImVec2{-1, 0});
+
+                        ImGui::Text("Vigenère Cipher: %.1f%%", vigenere_score);
+                        ImGui::ProgressBar(vigenere_score / 100.0f, ImVec2{-1, 0});
+
+                        ImGui::Text("Rail Fence Cipher: %.1f%%", rail_fence_score);
+                        ImGui::ProgressBar(rail_fence_score / 100.0f, ImVec2{-1, 0});
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        ImGui::Spacing();
+
+                        // Determine most likely cipher
+                        if (substitution_score >= transposition_score && substitution_score >= vigenere_score &&
+                            substitution_score >= rail_fence_score)
+                        {
+                            ImGui::TextColored(ImVec4{0.0f, 1.0f, 0.0f, 1.0f},
+                                               "Most Likely: SUBSTITUTION CIPHER (%.1f%%)", substitution_score);
+                        }
+                        else if (transposition_score >= vigenere_score && transposition_score >= rail_fence_score)
+                        {
+                            ImGui::TextColored(ImVec4{0.0f, 1.0f, 0.0f, 1.0f},
+                                               "Most Likely: TRANSPOSITION CIPHER (%.1f%%)", transposition_score);
+                        }
+                        else if (vigenere_score >= rail_fence_score)
+                        {
+                            ImGui::TextColored(ImVec4{0.0f, 1.0f, 0.0f, 1.0f}, "Most Likely: VIGENÈRE CIPHER (%.1f%%)",
+                                               vigenere_score);
+                        }
+                        else
+                        {
+                            ImGui::TextColored(ImVec4{0.0f, 1.0f, 0.0f, 1.0f},
+                                               "Most Likely: RAIL FENCE CIPHER (%.1f%%)", rail_fence_score);
+                        }
                     }
                 }
 
-                ImGui::EndTable();
+                ImGui::EndTabItem();
             }
 
-            ImGui::Spacing();
-            ImGui::TextWrapped(
-                "Tip: In English, the most common letters are E, T, A, O, I, N. Compare encrypted frequencies with "
-                "English frequencies to deduce the substitution mapping.");
+            // Tab 3: Bigram/Trigram Analysis
+            if (ImGui::BeginTabItem("N-gram Analysis"))
+            {
+                ImGui::TextCentered("Bigram and Trigram Frequencies");
+                ImGui::Spacing();
+
+                // Bigrams
+                ImGui::Text("Top Bigrams:");
+                const auto bigrams{tprotect::cipher::advanced_analyzer::analyze_bigrams(encrypted_text_)};
+                if (bigrams.empty())
+                {
+                    ImGui::TextCentered("No bigrams found");
+                }
+                else
+                {
+                    if (ImGui::BeginTable("BigramTable", 3,
+                                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                              ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("Bigram", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                        ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                        ImGui::TableSetupColumn("Frequency", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                        ImGui::TableHeadersRow();
+
+                        for (size_t i{}; i < std::min(size_t{10}, bigrams.size()); ++i)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%s", bigrams[i].bigram.c_str());
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%d", bigrams[i].count);
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::ProgressBar(bigrams[i].percentage / 100.0f, ImVec2{-1, 0},
+                                               std::format("{:.2f}%", bigrams[i].percentage).c_str());
+                        }
+
+                        ImGui::EndTable();
+                    }
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                // Trigrams
+                ImGui::Text("Top Trigrams:");
+                const auto trigrams{tprotect::cipher::advanced_analyzer::analyze_trigrams(encrypted_text_)};
+                if (trigrams.empty())
+                {
+                    ImGui::TextCentered("No trigrams found");
+                }
+                else
+                {
+                    if (ImGui::BeginTable("TrigramTable", 3,
+                                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                              ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("Trigram", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                        ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                        ImGui::TableSetupColumn("Frequency", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                        ImGui::TableHeadersRow();
+
+                        for (size_t i{}; i < std::min(size_t{10}, trigrams.size()); ++i)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%s", trigrams[i].trigram.c_str());
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%d", trigrams[i].count);
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::ProgressBar(trigrams[i].percentage / 100.0f, ImVec2{-1, 0},
+                                               std::format("{:.2f}%", trigrams[i].percentage).c_str());
+                        }
+
+                        ImGui::EndTable();
+                    }
+                }
+
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
         }
     }
-
-    // ImGui::PopFont();
+    ImGui::End();
 }
 
 [[nodiscard]] eresult<void> gui::process_file() noexcept
