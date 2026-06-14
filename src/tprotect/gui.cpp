@@ -323,11 +323,6 @@ void gui::render_window() noexcept
             ImGui::EndTable();
         }
 
-        // Cell (1,2): Cipher title
-        ImGui::TableSetColumnIndex(1);
-        ImGui::Spacing();
-        ImGui::TextCentered("Cipher");
-
         // Cell (1,3): Encrypted title
         ImGui::TableSetColumnIndex(2);
         if (ImGui::BeginTable("EncryptedHeader", 3,
@@ -503,7 +498,7 @@ void gui::render_window() noexcept
         ImGui::Separator();
         ImGui::Spacing();
 
-        if (ImGui::Button(show_stats_window_ ? "Hide Statistics" : "Show Statistics", ImVec2{button_width, 0}))
+        if (ImGui::Button("Statistics", ImVec2{button_width, 0}))
         {
             show_stats_window_ = !show_stats_window_;
         }

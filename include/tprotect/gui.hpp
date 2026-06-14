@@ -85,8 +85,6 @@ class gui final
     SDL_Renderer *renderer_{};
 
     // UI state
-    ImFont *futura_medium_{};
-    ImFont *jetbrains_mono_regular_{};
     enum class cipher_type
     {
         substitution,
@@ -94,6 +92,14 @@ class gui final
         vigenere,
         rail_fence,
     };
+    enum class stats_window_tabs
+    {
+        freqency_analysis,
+        cipher_detection,
+        ngram_analysis,
+    };
+    ImFont *futura_medium_{};
+    ImFont *jetbrains_mono_regular_{};
     std::string encrypted_text_;
     std::string decrypted_text_;
     cipher_type selected_cipher_{cipher_type::substitution};
@@ -105,7 +111,6 @@ class gui final
     std::string vigenere_key_{initial_vigenere};
     int rail_fence_rails_{initial_key};
     bool show_stats_window_{false};
-    int stats_window_tab_{0};
     double fps_idle_{10.};
     bool is_idling_{};
     std::atomic<bool> is_initialized_; // `std::atomic<bool>` for thread safety
